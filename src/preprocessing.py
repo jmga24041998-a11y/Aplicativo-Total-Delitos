@@ -1,86 +1,248 @@
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-import xgboost as xgb
-
-from src.preprocessing import ArtifactNotFoundError, PreprocessingError
 
 try:
     import joblib
 except ModuleNotFoundError as exc:
     raise ModuleNotFoundError(
-        "No se encontró el paquete 'joblib'. Verifica que 'joblib==1.4.2' esté en "
-        "'requirements.txt' en la raíz del repositorio y reinicia la app en Streamlit Cloud."
+        "No se encontró 'joblib'. Verifica que esté en 'requirements.txt' en la raíz y reinicia la app."
     ) from exc
 
 
-class CrimePredictor:
-    """Envoltorio de inferencia para un modelo XGBoost ya entrenado (sin reentrenamiento)."""
+class PreprocessingError(Exception):
+    """Error controlado en validación o transformación de variables de entrada."""
 
-    SUPPORTED_EXTENSIONS = {".ubj", ".json", ".model", ".joblib", ".pkl"}
 
-    def __init__(self, model_path: Path) -> None:
-        self.model_path = model_path
-        self.model: Any = self._load_model(model_path)
+class ArtifactNotFoundError(FileNotFoundError):
+    """Error cuando falta un archivo requerido del modelo o preprocesador."""
 
-    def _load_model(self, path: Path) -> Any:
-        if not path.exists() or not path.is_file():
-            raise ArtifactNotFoundError(
-                f"No se encontró el archivo del modelo entrenado en '{path}'. "
-                "Verifica la ruta o coloca el modelo serializado en la carpeta 'artifacts/'."
-            )
 
-        suffix = path.suffix.lower()
-        if suffix not in self.SUPPORTED_EXTENSIONS:
-            raise PreprocessingError(
-                f"Formato de modelo no soportado ('{suffix}'). "
-                f"Formatos admitidos: {', '.join(sorted(self.SUPPORTED_EXTENSIONS))}."
-            )
+DEFAULT_CATEGORIES: dict[str, list[str]] = {
+    "Entidad": [
+        "Aguascalientes", "Baja California", "Baja California Sur", "Campeche",
+        "Chiapas", "Chihuahua", "Ciudad de México", "Coahuila de Zaragoza",
+        "Colima", "Durango", "Guanajuato", "Guerrero", "Hidalgo", "Jalisco",
+        "México", "Michoacán de Ocampo", "Morelos", "Nayarit", "Nuevo León",
+        "Oaxaca", "Puebla", "Querétaro", "Quintana Roo", "San Luis Potosí",
+        "Sinaloa", "Sonora", "Tabasco", "Tamaulipas", "Tlaxcala",
+        "Veracruz de Ignacio de la Llave", "Yucatán", "Zacatecas",
+    ],
+    "Bien jurídico afectado": [
+        "La vida y la integridad corporal",
+        "El patrimonio",
+        "La libertad personal",
+        "La familia",
+        "La sociedad",
+        "Otros bienes jurídicos afectados (del fuero común)",
+    ],
+    "Tipo de delito": [
+        "Homicidio",
+        "Robo",
+        "Lesiones",
+        "Secuestro",
+        "Violencia familiar",
+        "Narcomenudeo",
+        "Fraude",
+        "Extorsión",
+    ],
+    "Subtipo de delito": [
+        "Homicidio doloso",
+        "Homicidio culposo",
+        "Robo a transeúnte en vía pública",
+        "Robo de vehículo automotor",
+        "Robo a casa habitación",
+        "Lesiones dolosas",
+        "Violencia familiar",
+        "Otro subtipo",
+    ],
+    "Modalidad": [
+        "Con arma de fuego",
+        "Con arma blanca",
+        "Con violencia",
+        "Sin violencia",
+        "No especificado",
+    ],
+    "Mes": [
+        "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+        "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+    ],
+    "Sexo": [
+        "Mujer",
+        "Hombre",
+        "No identificado",
+    ],
+    "Rango de edad": [
+        "Menor de edad (0-17)",
+        "Adulto (18 y más)",
+        "No especificado",
+    ],
+}
 
+NUMERIC_RANGES: dict[str, tuple[int, int]] = {
+    "Año": (2015, 2030),
+    "Clave_Ent": (1, 32),
+}
+
+
+@dataclass
+class InputPayload:
+    anio: int
+    clave_ent: int
+    entidad: str
+    bien_juridico: str
+    tipo_de_delito: str
+    subtipo_de_delito: str
+    modalidad: str
+    mes: str
+    sexo: str
+    rango_edad: str
+
+    def to_raw_dict(self) -> dict[str, Any]:
+        return {
+            "Año": self.anio,
+            "Clave_Ent": self.clave_ent,
+            "Entidad": self.entidad,
+            "Bien jurídico afectado": self.bien_juridico,
+            "Tipo de delito": self.tipo_de_delito,
+            "Subtipo de delito": self.subtipo_de_delito,
+            "Modalidad": self.modalidad,
+            "Mes": self.mes,
+            "Sexo": self.sexo,
+            "Rango de edad": self.rango_edad,
+        }
+
+
+def load_categories(categories_path: Path | None = None) -> dict[str, list[str]]:
+    """Carga categorías exactas desde JSON si existe; de lo contrario usa el catálogo base."""
+    if categories_path and categories_path.exists():
         try:
-            if suffix in {".ubj", ".json", ".model"}:
-                regressor = xgb.XGBRegressor()
-                regressor.load_model(str(path))
-                return regressor
-            return joblib.load(path)
+            data = json.loads(categories_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data:
+                return {str(k): [str(v) for v in vals] for k, vals in data.items()}
         except Exception as exc:
             raise PreprocessingError(
-                f"Error al cargar el modelo XGBoost desde '{path}': {exc}"
+                f"No se pudo leer el archivo de categorías '{categories_path}': {exc}"
             ) from exc
+    return {k: list(v) for k, v in DEFAULT_CATEGORIES.items()}
 
-    @property
-    def expected_features(self) -> int:
-        if hasattr(self.model, "n_features_in_") and self.model.n_features_in_ is not None:
-            return int(self.model.n_features_in_)
-        booster = self.model.get_booster() if hasattr(self.model, "get_booster") else None
-        if booster is not None and booster.num_features() > 0:
-            return int(booster.num_features())
-        return 208
 
-    def predict(self, features_df: pd.DataFrame) -> float:
-        if features_df.empty:
-            raise PreprocessingError("El conjunto de características para predecir está vacío.")
+def validate_inputs(payload: InputPayload, categories: dict[str, list[str]]) -> None:
+    """Valida rangos numéricos y pertenencia a categorías conocidas."""
+    min_year, max_year = NUMERIC_RANGES["Año"]
+    if not isinstance(payload.anio, (int, np.integer)) or isinstance(payload.anio, bool):
+        raise PreprocessingError("El campo 'Año' debe ser un número entero.")
+    if not (min_year <= payload.anio <= max_year):
+        raise PreprocessingError(
+            f"Valor fuera de rango en 'Año' ({payload.anio}). Debe estar entre {min_year} y {max_year}."
+        )
 
-        expected = self.expected_features
-        if features_df.shape[1] != expected:
+    min_ent, max_ent = NUMERIC_RANGES["Clave_Ent"]
+    if not isinstance(payload.clave_ent, (int, np.integer)) or isinstance(payload.clave_ent, bool):
+        raise PreprocessingError("El campo 'Clave_Ent' debe ser un número entero.")
+    if not (min_ent <= payload.clave_ent <= max_ent):
+        raise PreprocessingError(
+            f"Valor fuera de rango en 'Clave_Ent' ({payload.clave_ent}). Debe estar entre {min_ent} y {max_ent}."
+        )
+
+    raw = payload.to_raw_dict()
+    for field_name, allowed_values in categories.items():
+        value = raw.get(field_name)
+        if value not in allowed_values:
             raise PreprocessingError(
-                f"Número de columnas incompatible: se recibieron {features_df.shape[1]}, "
-                f"pero el modelo espera {expected}."
+                f"Categoría desconocida en '{field_name}': '{value}'. "
+                f"Seleccione una opción válida del catálogo entrenado."
             )
 
-        try:
-            raw_pred = self.model.predict(features_df)
-        except Exception as exc:
-            raise PreprocessingError(
-                f"Error durante la ejecución de predicción con XGBoost: {exc}"
-            ) from exc
 
-        pred_value = float(np.asarray(raw_pred).reshape(-1)[0])
-        if np.isnan(pred_value) or np.isinf(pred_value):
-            raise PreprocessingError("El modelo devolvió un valor no numérico o infinito.")
+class CrimePreprocessor:
+    """Transforma entradas validadas a una matriz alineada con las características del modelo."""
 
-        return max(0.0, pred_value)
+    def __init__(
+        self,
+        preprocessor_path: Path | None = None,
+        feature_names_path: Path | None = None,
+        expected_feature_count: int = 208,
+    ) -> None:
+        self.expected_feature_count = expected_feature_count
+        self.preprocessor: Any | None = None
+        self.feature_names: list[str] | None = None
+
+        if preprocessor_path and preprocessor_path.exists():
+            try:
+                self.preprocessor = joblib.load(preprocessor_path)
+            except Exception as exc:
+                raise PreprocessingError(
+                    f"Error al cargar el preprocesador '{preprocessor_path}': {exc}"
+                ) from exc
+
+        if feature_names_path and feature_names_path.exists():
+            try:
+                loaded = json.loads(feature_names_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    self.feature_names = [str(col) for col in loaded]
+            except Exception as exc:
+                raise PreprocessingError(
+                    f"Error al cargar los nombres de columnas '{feature_names_path}': {exc}"
+                ) from exc
+
+    def transform(self, payload: InputPayload, categories: dict[str, list[str]]) -> pd.DataFrame:
+        validate_inputs(payload, categories)
+        raw_df = pd.DataFrame([payload.to_raw_dict()])
+
+        if self.preprocessor is not None:
+            try:
+                transformed = self.preprocessor.transform(raw_df)
+            except Exception as exc:
+                raise PreprocessingError(
+                    f"Falló la transformación con el preprocesador guardado: {exc}"
+                ) from exc
+
+            if hasattr(transformed, "toarray"):
+                transformed = transformed.toarray()
+            arr = np.asarray(transformed, dtype=np.float32)
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)
+
+            if arr.shape[1] != self.expected_feature_count:
+                raise PreprocessingError(
+                    f"Inconsistencia de columnas tras preprocesar: se obtuvieron {arr.shape[1]} "
+                    f"columnas, pero el modelo XGBoost requiere {self.expected_feature_count}."
+                )
+
+            cols = (
+                self.feature_names
+                if self.feature_names and len(self.feature_names) == arr.shape[1]
+                else [f"f_{i}" for i in range(arr.shape[1])]
+            )
+            return pd.DataFrame(arr, columns=cols)
+
+        return self._fallback_align_features(raw_df, categories)
+
+    def _fallback_align_features(
+        self, raw_df: pd.DataFrame, categories: dict[str, list[str]]
+    ) -> pd.DataFrame:
+        encoded = pd.get_dummies(raw_df, columns=list(categories.keys()), dtype=np.float32)
+        encoded["Año"] = encoded["Año"].astype(np.float32)
+        encoded["Clave_Ent"] = encoded["Clave_Ent"].astype(np.float32)
+
+        if self.feature_names and len(self.feature_names) == self.expected_feature_count:
+            aligned = encoded.reindex(columns=self.feature_names, fill_value=0.0)
+            return aligned.astype(np.float32)
+
+        values = encoded.to_numpy(dtype=np.float32).flatten()
+        if values.size < self.expected_feature_count:
+            padded = np.zeros(self.expected_feature_count, dtype=np.float32)
+            padded[: values.size] = values
+            values = padded
+        elif values.size > self.expected_feature_count:
+            values = values[: self.expected_feature_count]
+
+        cols = [f"feature_{i}" for i in range(self.expected_feature_count)]
+        return pd.DataFrame([values], columns=cols)
