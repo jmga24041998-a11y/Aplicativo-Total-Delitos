@@ -1,0 +1,26 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Streamlit secrets & local config
+.streamlit/secrets.toml
+
+# OS & editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Large raw datasets (mantener solo artefactos ligeros necesarios para inferencia)
+*.csv
+*.parquet
+*.xlsx
+*.pdf
