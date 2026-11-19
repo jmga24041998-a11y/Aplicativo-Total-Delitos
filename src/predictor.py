@@ -3,12 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import joblib
 import numpy as np
 import pandas as pd
 import xgboost as xgb
 
 from src.preprocessing import ArtifactNotFoundError, PreprocessingError
+
+try:
+    import joblib
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "No se encontró el paquete 'joblib'. Verifica que 'joblib==1.4.2' esté en "
+        "'requirements.txt' en la raíz del repositorio y reinicia la app en Streamlit Cloud."
+    ) from exc
 
 
 class CrimePredictor:
@@ -39,10 +46,11 @@ class CrimePredictor:
                 regressor = xgb.XGBRegressor()
                 regressor.load_model(str(path))
                 return regressor
-            loaded = joblib.load(path)
-            return loaded
+            return joblib.load(path)
         except Exception as exc:
-            raise PreprocessingError(f"Error al cargar el modelo XGBoost desde '{path}': {exc}") from exc
+            raise PreprocessingError(
+                f"Error al cargar el modelo XGBoost desde '{path}': {exc}"
+            ) from exc
 
     @property
     def expected_features(self) -> int:
@@ -67,11 +75,12 @@ class CrimePredictor:
         try:
             raw_pred = self.model.predict(features_df)
         except Exception as exc:
-            raise PreprocessingError(f"Error durante la ejecución de predicción con XGBoost: {exc}") from exc
+            raise PreprocessingError(
+                f"Error durante la ejecución de predicción con XGBoost: {exc}"
+            ) from exc
 
         pred_value = float(np.asarray(raw_pred).reshape(-1)[0])
         if np.isnan(pred_value) or np.isinf(pred_value):
             raise PreprocessingError("El modelo devolvió un valor no numérico o infinito.")
 
-        # El total de delitos no puede ser negativo
         return max(0.0, pred_value)
