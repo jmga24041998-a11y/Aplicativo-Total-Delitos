@@ -89,6 +89,3 @@ class CrimePredictor:
             raise PreprocessingError("El modelo devolvió un valor no numérico o infinito.")
 
         return max(0.0, pred_value)
-            raise PreprocessingError("El modelo devolvió un valor no numérico o infinito.")
-
-        return max(0.0, pred_value)
