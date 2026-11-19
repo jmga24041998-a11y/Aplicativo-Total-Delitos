@@ -5,7 +5,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import xgboost as xgb
 
 from src.preprocessing import ArtifactNotFoundError, PreprocessingError
 
@@ -13,8 +12,14 @@ try:
     import joblib
 except ModuleNotFoundError as exc:
     raise ModuleNotFoundError(
-        "No se encontró el paquete 'joblib'. Verifica que 'joblib==1.4.2' esté en "
-        "'requirements.txt' en la raíz del repositorio y reinicia la app en Streamlit Cloud."
+        "Falta 'joblib'. Verifica que 'requirements.txt' esté en la raíz del repositorio y reinicia la app."
+    ) from exc
+
+try:
+    import xgboost as xgb
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "Falta 'xgboost'. Verifica que 'requirements.txt' esté en la raíz del repositorio y reinicia la app."
     ) from exc
 
 
@@ -81,6 +86,9 @@ class CrimePredictor:
 
         pred_value = float(np.asarray(raw_pred).reshape(-1)[0])
         if np.isnan(pred_value) or np.isinf(pred_value):
+            raise PreprocessingError("El modelo devolvió un valor no numérico o infinito.")
+
+        return max(0.0, pred_value)
             raise PreprocessingError("El modelo devolvió un valor no numérico o infinito.")
 
         return max(0.0, pred_value)
